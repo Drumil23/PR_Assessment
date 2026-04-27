@@ -1,26 +1,20 @@
+import requests
 import base64
 import json
 import time
 import os
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from PIL import Image
 
-load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
-if not API_KEY:
-    raise ValueError("GEMINI_API_KEY not found. Add it to your .env file.")
-client = genai.Client(api_key=API_KEY)
-MODEL = "gemini-2.0-flash-lite"
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llava"
 
+# Defining images 
 IMAGE_PATHS = {
     "Image 1": "images/img1.png",
     "Image 2": "images/img2.png",
     "Image 3": "images/img3.png",
 }
 
-# Define prompts for each task to evaluate the model's understanding of pallet readiness
+# Defining prompts for different aspects of pallet readiness detection
 PROMPTS = {
     "Scene understanding": (
         "You are a vision system on an autonomous mobile robot (AMR) with forks "
@@ -56,20 +50,13 @@ PROMPTS = {
     ),
 }
 
-
-def load_image_as_part(image_path):
-    """Load an image and return it as a Gemini API part."""
+def encode_image(image_path):
+    """Convert image to base64 string for Ollama."""
     with open(image_path, "rb") as f:
-        image_bytes = f.read()
-
-    ext = os.path.splitext(image_path)[1].lower().strip(".")
-    mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
-    mime_type = mime_map.get(ext, "image/png")
-
-    return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        return base64.b64encode(f.read()).decode("utf-8")
 
 
-# Run inference on each image with each prompt
+# Run inference on each image with each prompt and store results
 results = {}
 
 for img_name, img_path in IMAGE_PATHS.items():
@@ -79,19 +66,21 @@ for img_name, img_path in IMAGE_PATHS.items():
 
     print(f"Processing: {img_name} ({img_path})")
 
-    image_part = load_image_as_part(img_path)
+    img_b64 = encode_image(img_path)
     results[img_name] = {}
 
     for prompt_name, prompt_text in PROMPTS.items():
         print(f"\n--- {prompt_name} ---")
         start = time.time()
 
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=[image_part, prompt_text],
-        )
+        resp = requests.post(OLLAMA_URL, json={
+            "model": MODEL,
+            "prompt": prompt_text,
+            "images": [img_b64],
+            "stream": False,
+        })
 
-        answer = response.text
+        answer = resp.json().get("response", "No response")
         elapsed = time.time() - start
 
         print(answer)
@@ -103,9 +92,6 @@ for img_name, img_path in IMAGE_PATHS.items():
             "inference_time_s": round(elapsed, 2),
         }
 
-        # Small delay to respect rate limits on free tier
-        time.sleep(1)
-
     print("\n")
 
 # Save raw results to JSON file for further analysis
@@ -113,9 +99,9 @@ output_file = "pallet_readiness_results.json"
 with open(output_file, "w") as f:
     json.dump(results, f, indent=2)
 
-print(f"Raw results saved to {output_file}")
+print(f"\nRaw results saved to {output_file}")
 
-# Print summary of key findings for each image
+# Print summary of key findings
 print("SUMMARY")
 for img_name, data in results.items():
     readiness = data.get("Readiness classification", {}).get("response", "N/A")
